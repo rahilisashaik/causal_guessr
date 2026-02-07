@@ -196,7 +196,8 @@ def generate_puzzle_seed(
 
         model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         examples_str = json.dumps(FEW_SHOT_SEEDS, indent=2)
-        requested_source = random.choice(["fred", "google_trends", "nber"])
+        # NBER kept in codebase but excluded from prod for now (not reliable enough)
+        requested_source = random.choice(["fred", "google_trends"])
         series_list = (
             ", ".join(NBER_SERIES_EXAMPLES)
             if requested_source == "nber"

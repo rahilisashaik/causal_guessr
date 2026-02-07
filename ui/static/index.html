@@ -112,6 +112,16 @@
       opacity: 0.6;
       cursor: not-allowed;
     }
+    .guess-row button.btn-skip {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .guess-row button.btn-skip:hover {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--muted);
+    }
     .result {
       margin-top: 1rem;
       padding: 1rem;
@@ -255,6 +265,7 @@
       <div class="guess-row">
         <input type="text" id="guessInput" placeholder="Enter the event or cause…" autocomplete="off">
         <button type="submit" id="submitBtn">Submit</button>
+        <button type="button" id="skipBtn" class="btn-skip">Skip</button>
       </div>
     </form>
     <div class="result" id="result"></div>
@@ -274,6 +285,7 @@
     const resultEl = document.getElementById('result');
     const nextWrap = document.getElementById('nextWrap');
     const nextBtn = document.getElementById('nextBtn');
+    const skipBtn = document.getElementById('skipBtn');
     const attemptsEl = document.getElementById('attemptsEl');
     const preferenceInput = document.getElementById('preferenceInput');
 
@@ -296,6 +308,7 @@
       nextWrap.classList.remove('visible');
       guessInput.value = '';
       submitBtn.disabled = true;
+      if (skipBtn) skipBtn.disabled = true;
       hasActiveGame = false;
       try {
         const preference = (preferenceInput && preferenceInput.value.trim()) || '';
@@ -319,6 +332,7 @@
         chartLoading.style.display = 'block';
       }
       submitBtn.disabled = false;
+      if (skipBtn) skipBtn.disabled = false;
     }
 
     guessForm.addEventListener('submit', async (e) => {
@@ -364,6 +378,7 @@
     });
 
     nextBtn.addEventListener('click', () => loadNewGame());
+    skipBtn.addEventListener('click', () => loadNewGame());
 
     loadNewGame();
   </script>
