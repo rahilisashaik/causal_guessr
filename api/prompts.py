@@ -32,10 +32,12 @@ def build_puzzle_seed_prompt(
     series_list: str,
     examples_str: str,
     avoid_2019_2021_covid: bool = False,
+    user_preference: str | None = None,
 ) -> str:
     """
-    Build the prompt for generating a single puzzle seed (FRED or Google Trends).
+    Build the prompt for generating a single puzzle seed (FRED, Google Trends, or NBER).
     Call from seed_generator when calling the LLM. Designed for variety and robustness.
+    If user_preference is set, the LLM must tailor the puzzle to that preference.
     """
     era_hint = (
         random.choice(NBER_ERA_SUGGESTIONS)
@@ -51,6 +53,8 @@ def build_puzzle_seed_prompt(
 
 Variety rules:
 - Pick a UNIQUE combination: do not repeat the same series + date range as the examples.
+- Try to pick unique and unusual events (e.g. Panic of 1893, World War I, Great Depression), events like oil crash are too common, if you use these events, they should be unique in the way they occured.
+- The events should be able to be described by a name, not just a vague time period.
 - Prefer different events (e.g. 1980s recession, dot-com bust, 1990s recession, 2008 crisis) and vary the decade.
 - Get data dating back very far into the 1800s and 1700s
 - This time: {era_hint}'''
@@ -79,9 +83,15 @@ Variety rules:
 
 Session constraint: This session has already had puzzles from 2019-2021 or COVID-19. You MUST NOT use date range 2019-2021. Use a different range (e.g. 2007-2009, 2001-2003, 1980-1983). You MUST NOT use COVID-19 pandemic as correctEvent; use e.g. 2008 financial crisis, dot-com bust, early 1980s recession, oil crisis."""
 
+    preference_instruction = ""
+    if user_preference and user_preference.strip():
+        preference_instruction = f"""
+
+User preference (you MUST follow this when picking the event and date range): {user_preference.strip()}"""
+
     return f"""You are creating a single "causal guessr" puzzle: a time-series chart where the player must guess what real-world event caused the trend. They get 4 guesses and a hint after each wrong guess. Do not give away the answer until the 4th hint.
 
-{source_instruction}{avoid_instruction}
+{source_instruction}{avoid_instruction}{preference_instruction}
 
 Output exactly one JSON object with the required keys. No other text, no markdown, no code block.
 Examples (format only; do not copy content—pick different series/terms, dates, and events):

@@ -186,6 +186,28 @@
     .hint-box strong {
       color: var(--accent);
     }
+    .preference-row {
+      margin-bottom: 1rem;
+    }
+    .preference-row label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .preference-row input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      color: var(--text);
+      font-family: inherit;
+    }
+    .preference-row input::placeholder {
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -193,6 +215,10 @@
   <p class="subtitle">What event caused this trend?</p>
 
   <div class="card">
+    <div class="preference-row">
+      <label for="preferenceInput">Event preference (optional) — applies to next puzzle</label>
+      <input type="text" id="preferenceInput" placeholder="e.g. only events in the 20th century" autocomplete="off">
+    </div>
     <p class="chart-title" id="chartTitle">—</p>
     <div class="chart-wrap" id="chartWrap">
       <span class="loading" id="chartLoading">Loading puzzle…</span>
@@ -223,13 +249,15 @@
     const nextWrap = document.getElementById('nextWrap');
     const nextBtn = document.getElementById('nextBtn');
     const attemptsEl = document.getElementById('attemptsEl');
+    const preferenceInput = document.getElementById('preferenceInput');
 
     let hasActiveGame = false;
     let attemptsLeft = 4;
+    let guessRequestInFlight = false;
 
     function setAttempts(n) {
-      attemptsLeft = n;
-      attemptsEl.textContent = n === 1 ? '1 guess left' : n + ' guesses left';
+      attemptsLeft = Math.max(0, n);
+      attemptsEl.textContent = attemptsLeft === 1 ? '1 guess left' : attemptsLeft + ' guesses left';
     }
 
     async function loadNewGame() {
@@ -244,7 +272,9 @@
       submitBtn.disabled = true;
       hasActiveGame = false;
       try {
-        const r = await fetch('/api/game/new');
+        const preference = (preferenceInput && preferenceInput.value.trim()) || '';
+        const url = preference ? '/api/game/new?preference=' + encodeURIComponent(preference) : '/api/game/new';
+        const r = await fetch(url);
         if (!r.ok) {
           const err = await r.json().catch(() => ({}));
           throw new Error(err.detail || r.statusText || 'Failed to load game');
@@ -268,7 +298,8 @@
     guessForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const guess = guessInput.value.trim();
-      if (!guess || !hasActiveGame || attemptsLeft <= 0) return;
+      if (!guess || !hasActiveGame || attemptsLeft <= 0 || guessRequestInFlight) return;
+      guessRequestInFlight = true;
       submitBtn.disabled = true;
       resultEl.classList.remove('visible', 'correct', 'wrong');
       try {
@@ -289,8 +320,8 @@
           resultEl.classList.add('visible', 'wrong');
           let msg = '<strong>Not quite.</strong>';
           if (data.hint) msg += '<div class="hint-box"><strong>Hint:</strong> ' + data.hint + '</div>';
-          if (data.attempts_left <= 0 && data.correctEvent) {
-            msg += '<br><br>The answer was: <strong>' + data.correctEvent + '</strong>';
+          if (data.attempts_left <= 0) {
+            msg += '<br><br>The answer was: <strong>' + (data.correctEvent || '—') + '</strong>';
             if (data.explanation) msg += '<br><br>' + data.explanation;
             nextWrap.classList.add('visible');
           }
@@ -299,8 +330,10 @@
       } catch (err) {
         resultEl.classList.add('visible', 'wrong');
         resultEl.innerHTML = '<strong>Error</strong> submitting guess.';
+      } finally {
+        guessRequestInFlight = false;
+        submitBtn.disabled = attemptsLeft <= 0;
       }
-      submitBtn.disabled = attemptsLeft <= 0;
       guessInput.value = '';
     });
 

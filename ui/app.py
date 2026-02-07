@@ -94,11 +94,11 @@ def _is_covid_event(correct_event: str) -> bool:
 
 
 @app.get("/api/game/new")
-def new_game():
+def new_game(preference: str | None = None):
     """
-    Generate one puzzle via LLM (seed) + FRED or Google Trends, render chart, set as current game.
+    Generate one puzzle via LLM (seed) + FRED/Google Trends/NBER, render chart, set as current game.
     If fetch fails, retries with a new seed (up to _MAX_SEED_RETRIES).
-    Minimizes 2019-2021 and COVID seeds per session (server lifetime).
+    Optional query param: preference — user preference to tailor seed (e.g. "only 20th century events").
     Returns { id, title, imageBase64, seed_source, attempts_left }. On failure returns 503.
     """
     global _current_game, _session_2019_2021_count, _session_covid_count
@@ -111,12 +111,14 @@ def new_game():
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Setup error: {e!s}") from e
 
+    user_pref = (preference or "").strip() or None
     last_error = None
     for attempt in range(1, _MAX_SEED_RETRIES + 1):
         try:
             seed = generate_puzzle_seed(
                 session_2019_2021_count=_session_2019_2021_count,
                 session_covid_count=_session_covid_count,
+                user_preference=user_pref,
             )
         except Exception as e:
             raise HTTPException(
@@ -281,13 +283,14 @@ def submit_guess(body: GuessBody):
             detail="No active game. Call GET /api/game/new first.",
         )
 
-    if _current_game.get("attempts_left", 0) <= 0:
+    attempts_left = max(0, _current_game.get("attempts_left", 0))
+    if attempts_left <= 0:
         return {
             "correct": False,
             "attempts_left": 0,
             "hint": None,
-            "correctEvent": _current_game.get("correctEvent", ""),
-            "explanation": _current_game.get("explanation", ""),
+            "correctEvent": _current_game.get("correctEvent") or "",
+            "explanation": _current_game.get("explanation") or "",
         }
 
     acceptable = list(_current_game.get("acceptableAnswers") or [])
@@ -311,11 +314,12 @@ def submit_guess(body: GuessBody):
     if correct:
         return {
             "correct": True,
-            "attempts_left": _current_game["attempts_left"],
-            "explanation": _current_game.get("explanation", ""),
+            "attempts_left": attempts_left,
+            "explanation": _current_game.get("explanation") or "",
         }
 
-    _current_game["attempts_left"] = _current_game["attempts_left"] - 1
+    # Single decrement per request; never go below 0
+    _current_game["attempts_left"] = max(0, attempts_left - 1)
     attempts_left = _current_game["attempts_left"]
     hints = _current_game.get("hints") or []
     hint_index = 4 - attempts_left - 1
@@ -326,9 +330,10 @@ def submit_guess(body: GuessBody):
         "attempts_left": attempts_left,
         "hint": hint,
     }
+    # Always include answer when no attempts left so the UI can show it
     if attempts_left <= 0:
-        out["correctEvent"] = _current_game.get("correctEvent", "")
-        out["explanation"] = _current_game.get("explanation", "")
+        out["correctEvent"] = _current_game.get("correctEvent") or ""
+        out["explanation"] = _current_game.get("explanation") or ""
     return out
 
 

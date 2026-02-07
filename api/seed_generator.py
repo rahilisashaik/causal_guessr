@@ -163,11 +163,13 @@ def generate_puzzle_seed(
     *,
     session_2019_2021_count: int = 0,
     session_covid_count: int = 0,
+    user_preference: str | None = None,
 ) -> dict:
     """
     Produce one puzzle seed: try LLM (OpenAI) first; on failure (quota, no key, etc.)
     fall back to a random seed from puzzle_seeds.json.
     When session_2019_2021_count or session_covid_count >= 1, bias away from 2019-2021 and COVID.
+    If user_preference is set, the LLM is instructed to tailor the puzzle to that preference.
     """
     avoid_2019_2021_covid = session_2019_2021_count >= 1 or session_covid_count >= 1
 
@@ -206,6 +208,7 @@ def generate_puzzle_seed(
             series_list=series_list,
             examples_str=examples_str,
             avoid_2019_2021_covid=avoid_2019_2021_covid,
+            user_preference=user_preference,
         )
 
         client = OpenAI(api_key=api_key)
