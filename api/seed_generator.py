@@ -36,6 +36,12 @@ FEW_SHOT_SEEDS = [
         "correctEvent": "COVID-19 pandemic",
         "acceptableAnswers": ["covid", "covid-19", "coronavirus", "pandemic"],
         "explanation": "Lockdowns and layoffs in spring 2020 caused a sharp rise in unemployment.",
+        "hints": [
+            "Think about a major global disruption that began in early 2020.",
+            "It led to widespread lockdowns and a sharp drop in economic activity.",
+            "The event is often referred to by a short acronym or number.",
+            "COVID-19 pandemic",
+        ],
     },
     {
         "seriesId": "FEDFUNDS",
@@ -44,8 +50,31 @@ FEW_SHOT_SEEDS = [
         "correctEvent": "2008 financial crisis",
         "acceptableAnswers": ["2008", "financial crisis", "recession", "fed", "rate cuts"],
         "explanation": "The Fed cut rates aggressively in response to the 2008 crisis.",
+        "hints": [
+            "Consider a major financial shock that peaked around 2008.",
+            "Central banks responded by cutting interest rates sharply.",
+            "It is often called the Great Recession or named after a year.",
+            "2008 financial crisis",
+        ],
     },
 ]
+
+
+def _ensure_hints(seed: dict) -> dict:
+    """Ensure seed has exactly 4 hints (increasingly obvious). Build from explanation/correctEvent if missing."""
+    hints = seed.get("hints")
+    if isinstance(hints, list) and len(hints) >= 4:
+        seed["hints"] = hints[:4]
+        return seed
+    expl = seed.get("explanation") or ""
+    event = seed.get("correctEvent") or "the correct event"
+    seed["hints"] = [
+        "Think about major economic or global events in this date range.",
+        expl or "The trend is linked to a well-known historical event.",
+        "The answer is often abbreviated or has a common short name.",
+        event,
+    ]
+    return seed
 
 
 def _random_seed_from_file() -> dict:
@@ -59,6 +88,8 @@ def _random_seed_from_file() -> dict:
     seed = random.choice(seeds)
     if not isinstance(seed.get("acceptableAnswers"), list):
         seed["acceptableAnswers"] = [seed["acceptableAnswers"]] if seed.get("acceptableAnswers") else []
+    seed["seed_source"] = "fallback"
+    _ensure_hints(seed)
     logger.info(
         "seed_source=fallback seriesId=%s startDate=%s endDate=%s correctEvent=%s",
         seed.get("seriesId"),
@@ -77,13 +108,13 @@ def generate_puzzle_seed() -> dict:
     try:
         from openai import OpenAI
     except ImportError:
-        return _random_seed_from_file()
+        return _random_seed_from_file()  # adds seed_source=fallback
 
     raw_key = os.environ.get("OPENAI_API_KEY")
     api_key = (raw_key or "").strip().strip('"').strip("'") if raw_key else None
     if not api_key:
         logger.info("OPENAI_API_KEY missing or empty, using fallback seed")
-        return _random_seed_from_file()
+        return _random_seed_from_file()  # adds seed_source=fallback
 
     # Safe hint for verification (never log the full key)
     key_hint = (api_key[:12] + "…") if len(api_key) > 12 else "…"
@@ -97,7 +128,7 @@ def generate_puzzle_seed() -> dict:
         examples_str = json.dumps(FEW_SHOT_SEEDS, indent=2)
         series_list = ", ".join(FRED_SERIES_EXAMPLES)
 
-        prompt = f"""You are helping create a single "causal guessr" puzzle. The puzzle shows a time-series chart from FRED (Federal Reserve Economic Data). The player must guess what real-world event caused the visible trend.
+        prompt = f"""You are helping create a single "causal guessr" puzzle. The puzzle shows a time-series chart from FRED (Federal Reserve Economic Data). The player has 4 guesses; after each wrong guess they get the next hint. Do not give away the answer until the 4th hint.
 
 Output exactly one puzzle seed as a JSON object with these keys (no other text, no markdown):
 - seriesId: a FRED series ID from this list (use only these): {series_list}
@@ -106,11 +137,12 @@ Output exactly one puzzle seed as a JSON object with these keys (no other text, 
 - correctEvent: short name of the causal event (e.g. "COVID-19 pandemic", "2008 financial crisis")
 - acceptableAnswers: list of strings that count as correct (lowercase variants, e.g. "covid", "covid-19", "pandemic")
 - explanation: one sentence explaining why this event caused this trend
+- hints: an array of exactly 4 strings, each a hint shown after a wrong guess. Make them increasingly obvious: hint 1 is vague (time period or category), hint 2 narrows it, hint 3 gets closer (e.g. type of event or common abbreviation), hint 4 is the answer (correctEvent) or one word away from it.
 
 Examples of valid seeds:
 {examples_str}
 
-Pick a series and date range that has a clear, famous causal story (recession, pandemic, policy, etc.). Vary the event and series; do not always pick COVID or 2008. Output only the JSON object for one puzzle seed."""
+Pick a series and date range that has a clear, famous causal story. Vary the event and series. Output only the JSON object for one puzzle seed."""
 
         client = OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
@@ -132,6 +164,8 @@ Pick a series and date range that has a clear, famous causal story (recession, p
                 raise ValueError(f"LLM seed missing key: {k}")
         if not isinstance(seed["acceptableAnswers"], list):
             seed["acceptableAnswers"] = [seed["acceptableAnswers"]]
+        _ensure_hints(seed)
+        seed["seed_source"] = "llm"
         logger.info(
             "seed_source=llm seriesId=%s startDate=%s endDate=%s correctEvent=%s",
             seed.get("seriesId"),
@@ -148,7 +182,7 @@ Pick a series and date range that has a clear, famous causal story (recession, p
                 "OpenAI returned 429 (insufficient quota). Using fallback seed. "
                 "To use LLM-generated seeds: add a payment method at https://platform.openai.com/account/billing"
             )
-            return _random_seed_from_file()
+            return _random_seed_from_file()  # adds seed_source=fallback
         # 401/403: re-raise so you know the key is invalid
         if "401" in err_str or "403" in err_str:
             logger.warning("LLM seed generation failed (auth): %s", e)

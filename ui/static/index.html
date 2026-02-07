@@ -169,6 +169,23 @@
       border-color: var(--accent);
       color: var(--accent);
     }
+    .attempts {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0 0 0.75rem;
+    }
+    .hint-box {
+      margin-top: 0.5rem;
+      padding: 0.75rem;
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .hint-box strong {
+      color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -181,6 +198,7 @@
       <span class="loading" id="chartLoading">Loading puzzle…</span>
       <img id="chartImage" alt="Trend chart" style="display: none;">
     </div>
+    <p class="attempts" id="attemptsEl">4 guesses left</p>
     <form id="guessForm">
       <div class="guess-row">
         <input type="text" id="guessInput" placeholder="Enter the event or cause…" autocomplete="off">
@@ -204,8 +222,15 @@
     const resultEl = document.getElementById('result');
     const nextWrap = document.getElementById('nextWrap');
     const nextBtn = document.getElementById('nextBtn');
+    const attemptsEl = document.getElementById('attemptsEl');
 
     let hasActiveGame = false;
+    let attemptsLeft = 4;
+
+    function setAttempts(n) {
+      attemptsLeft = n;
+      attemptsEl.textContent = n === 1 ? '1 guess left' : n + ' guesses left';
+    }
 
     async function loadNewGame() {
       chartLoading.textContent = 'Generating puzzle…';
@@ -213,6 +238,7 @@
       chartImage.style.display = 'none';
       resultEl.classList.remove('visible');
       resultEl.textContent = '';
+      resultEl.className = 'result';
       nextWrap.classList.remove('visible');
       guessInput.value = '';
       submitBtn.disabled = true;
@@ -225,6 +251,7 @@
         }
         const data = await r.json();
         hasActiveGame = true;
+        setAttempts(data.attempts_left ?? 4);
         chartTitle.textContent = data.title;
         chartImage.src = 'data:image/png;base64,' + data.imageBase64;
         chartImage.onload = () => {
@@ -241,7 +268,7 @@
     guessForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const guess = guessInput.value.trim();
-      if (!guess || !hasActiveGame) return;
+      if (!guess || !hasActiveGame || attemptsLeft <= 0) return;
       submitBtn.disabled = true;
       resultEl.classList.remove('visible', 'correct', 'wrong');
       try {
@@ -251,16 +278,30 @@
           body: JSON.stringify({ guess }),
         });
         const data = await r.json();
-        resultEl.classList.add('visible', data.correct ? 'correct' : 'wrong');
-        resultEl.innerHTML = data.correct
-          ? '<strong>Correct!</strong>' + (data.explanation ? ' ' + data.explanation : '')
-          : '<strong>Not quite.</strong> The answer was: ' + data.correctEvent + (data.explanation ? '<br><br>' + data.explanation : '');
-        nextWrap.classList.add('visible');
+        setAttempts(data.attempts_left ?? 0);
+
+        if (data.correct) {
+          resultEl.classList.add('visible', 'correct');
+          resultEl.innerHTML = '<strong>Correct!</strong>' + (data.explanation ? ' ' + data.explanation : '');
+          nextWrap.classList.add('visible');
+          submitBtn.disabled = true;
+        } else {
+          resultEl.classList.add('visible', 'wrong');
+          let msg = '<strong>Not quite.</strong>';
+          if (data.hint) msg += '<div class="hint-box"><strong>Hint:</strong> ' + data.hint + '</div>';
+          if (data.attempts_left <= 0 && data.correctEvent) {
+            msg += '<br><br>The answer was: <strong>' + data.correctEvent + '</strong>';
+            if (data.explanation) msg += '<br><br>' + data.explanation;
+            nextWrap.classList.add('visible');
+          }
+          resultEl.innerHTML = msg;
+        }
       } catch (err) {
         resultEl.classList.add('visible', 'wrong');
         resultEl.innerHTML = '<strong>Error</strong> submitting guess.';
       }
-      submitBtn.disabled = false;
+      submitBtn.disabled = attemptsLeft <= 0;
+      guessInput.value = '';
     });
 
     nextBtn.addEventListener('click', () => loadNewGame());

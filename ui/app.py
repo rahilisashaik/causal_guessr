@@ -147,6 +147,10 @@ def new_game():
             continue
 
         image_b64 = base64.standard_b64encode(png_bytes).decode("ascii")
+        seed_source = seed.get("seed_source", "unknown")
+        hints = list(seed.get("hints") or [])[:4]
+        while len(hints) < 4:
+            hints.append(seed.get("correctEvent") or "The correct event.")
         _current_game = {
             "id": pid,
             "title": title,
@@ -154,12 +158,17 @@ def new_game():
             "correctEvent": seed["correctEvent"],
             "acceptableAnswers": list(seed.get("acceptableAnswers") or []),
             "explanation": seed.get("explanation") or "",
+            "seed_source": seed_source,
+            "hints": hints,
+            "attempts_left": 4,
         }
 
         return {
             "id": _current_game["id"],
             "title": _current_game["title"],
             "imageBase64": _current_game["imageBase64"],
+            "seed_source": seed_source,
+            "attempts_left": 4,
         }
 
     raise HTTPException(
@@ -174,23 +183,52 @@ class GuessBody(BaseModel):
 
 @app.post("/api/game/guess")
 def submit_guess(body: GuessBody):
-    """Check guess against the current game. Returns { correct, explanation, correctEvent }."""
+    """
+    Check guess against the current game. Player has 4 attempts; each wrong guess
+    returns the next hint. Answer (correctEvent) only returned when attempts exhausted.
+    """
     if _current_game is None:
         raise HTTPException(
             status_code=409,
             detail="No active game. Call GET /api/game/new first.",
         )
 
+    if _current_game.get("attempts_left", 0) <= 0:
+        return {
+            "correct": False,
+            "attempts_left": 0,
+            "hint": None,
+            "correctEvent": _current_game.get("correctEvent", ""),
+            "explanation": _current_game.get("explanation", ""),
+        }
+
     acceptable = list(_current_game.get("acceptableAnswers") or [])
     if _current_game.get("correctEvent"):
         acceptable.append(_current_game["correctEvent"])
     correct = _check_guess(body.guess, acceptable)
 
-    return {
-        "correct": correct,
-        "explanation": _current_game.get("explanation", ""),
-        "correctEvent": _current_game.get("correctEvent", ""),
+    if correct:
+        return {
+            "correct": True,
+            "attempts_left": _current_game["attempts_left"],
+            "explanation": _current_game.get("explanation", ""),
+        }
+
+    _current_game["attempts_left"] = _current_game["attempts_left"] - 1
+    attempts_left = _current_game["attempts_left"]
+    hints = _current_game.get("hints") or []
+    hint_index = 4 - attempts_left - 1
+    hint = hints[hint_index] if 0 <= hint_index < len(hints) else None
+
+    out = {
+        "correct": False,
+        "attempts_left": attempts_left,
+        "hint": hint,
     }
+    if attempts_left <= 0:
+        out["correctEvent"] = _current_game.get("correctEvent", "")
+        out["explanation"] = _current_game.get("explanation", "")
+    return out
 
 
 if STATIC_DIR.is_dir():
