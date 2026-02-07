@@ -57,6 +57,21 @@ FEW_SHOT_SEEDS = [
             "2008 financial crisis",
         ],
     },
+    {
+        "source": "google_trends",
+        "searchTerm": "toilet paper",
+        "startDate": "2020-01-01",
+        "endDate": "2020-06-30",
+        "correctEvent": "COVID-19 pandemic",
+        "acceptableAnswers": ["covid", "covid-19", "coronavirus", "pandemic", "panic buying"],
+        "explanation": "Panic buying and stockpiling in early 2020 caused a spike in search interest for toilet paper.",
+        "hints": [
+            "Think about what people suddenly searched for in early 2020.",
+            "Shortages and stockpiling drove interest in this everyday product.",
+            "The event was a global health crisis with lockdowns.",
+            "COVID-19 pandemic",
+        ],
+    },
 ]
 
 
@@ -77,7 +92,19 @@ def _ensure_hints(seed: dict) -> dict:
     return seed
 
 
-def _random_seed_from_file() -> dict:
+def _is_2019_2021(start: str, end: str) -> bool:
+    """True if date range overlaps 2019-2021."""
+    if not start or not end:
+        return False
+    return start <= "2021-12-31" and end >= "2019-01-01"
+
+
+def _is_covid_event(correct_event: str) -> bool:
+    """True if correctEvent is COVID-related."""
+    return "covid" in (correct_event or "").lower() or "pandemic" in (correct_event or "").lower()
+
+
+def _random_seed_from_file(*, avoid_2019_2021_and_covid: bool = False) -> dict:
     """Return a random puzzle seed from puzzle_seeds.json. Raises if file missing or empty."""
     if not PUZZLE_SEEDS_PATH.exists():
         raise FileNotFoundError("puzzle_seeds.json not found")
@@ -85,6 +112,14 @@ def _random_seed_from_file() -> dict:
         seeds = json.load(f)
     if not seeds:
         raise ValueError("puzzle_seeds.json is empty")
+    if avoid_2019_2021_and_covid:
+        preferred = [
+            s for s in seeds
+            if not (_is_2019_2021(s.get("startDate") or "", s.get("endDate") or "")
+                    or _is_covid_event(s.get("correctEvent")))
+        ]
+        if preferred:
+            seeds = preferred
     seed = random.choice(seeds)
     if not isinstance(seed.get("acceptableAnswers"), list):
         seed["acceptableAnswers"] = [seed["acceptableAnswers"]] if seed.get("acceptableAnswers") else []
@@ -100,21 +135,28 @@ def _random_seed_from_file() -> dict:
     return seed
 
 
-def generate_puzzle_seed() -> dict:
+def generate_puzzle_seed(
+    *,
+    session_2019_2021_count: int = 0,
+    session_covid_count: int = 0,
+) -> dict:
     """
     Produce one puzzle seed: try LLM (OpenAI) first; on failure (quota, no key, etc.)
     fall back to a random seed from puzzle_seeds.json.
+    When session_2019_2021_count or session_covid_count >= 1, bias away from 2019-2021 and COVID.
     """
+    avoid_2019_2021_covid = session_2019_2021_count >= 1 or session_covid_count >= 1
+
     try:
         from openai import OpenAI
     except ImportError:
-        return _random_seed_from_file()  # adds seed_source=fallback
+        return _random_seed_from_file(avoid_2019_2021_and_covid=avoid_2019_2021_covid)
 
     raw_key = os.environ.get("OPENAI_API_KEY")
     api_key = (raw_key or "").strip().strip('"').strip("'") if raw_key else None
     if not api_key:
         logger.info("OPENAI_API_KEY missing or empty, using fallback seed")
-        return _random_seed_from_file()  # adds seed_source=fallback
+        return _random_seed_from_file(avoid_2019_2021_and_covid=avoid_2019_2021_covid)
 
     # Safe hint for verification (never log the full key)
     key_hint = (api_key[:12] + "…") if len(api_key) > 12 else "…"
@@ -128,21 +170,36 @@ def generate_puzzle_seed() -> dict:
         examples_str = json.dumps(FEW_SHOT_SEEDS, indent=2)
         series_list = ", ".join(FRED_SERIES_EXAMPLES)
 
-        prompt = f"""You are helping create a single "causal guessr" puzzle. The puzzle shows a time-series chart from FRED (Federal Reserve Economic Data). The player has 4 guesses; after each wrong guess they get the next hint. Do not give away the answer until the 4th hint.
+        # Randomly request one source so we get variety (avoid always getting the same example)
+        requested_source = random.choice(["fred", "google_trends"])
 
-Output exactly one puzzle seed as a JSON object with these keys (no other text, no markdown):
-- seriesId: a FRED series ID from this list (use only these): {series_list}
-- startDate: YYYY-MM-DD (start of the date range to fetch)
-- endDate: YYYY-MM-DD (end of the date range)
-- correctEvent: short name of the causal event (e.g. "COVID-19 pandemic", "2008 financial crisis")
-- acceptableAnswers: list of strings that count as correct (lowercase variants, e.g. "covid", "covid-19", "pandemic")
-- explanation: one sentence explaining why this event caused this trend
-- hints: an array of exactly 4 strings, each a hint shown after a wrong guess. Make them increasingly obvious: hint 1 is vague (time period or category), hint 2 narrows it, hint 3 gets closer (e.g. type of event or common abbreviation), hint 4 is the answer (correctEvent) or one word away from it.
+        if requested_source == "fred":
+            source_instruction = f'''You MUST output a FRED seed with "source": "fred".
+- seriesId: from this list ONLY: {series_list}
+- startDate, endDate: YYYY-MM-DD
+- correctEvent, acceptableAnswers (list), explanation, hints (array of 4 strings, increasingly obvious)
+Pick a DIFFERENT series and date range than the examples (e.g. different recession, different event).'''
+        else:
+            source_instruction = '''You MUST output a Google Trends seed with "source": "google_trends".
+- searchTerm: a phrase people actually search (e.g. "face mask", "stimulus check", "vaccine", "inflation")
+- startDate, endDate: YYYY-MM-DD
+- correctEvent, acceptableAnswers (list), explanation, hints (array of 4 strings, increasingly obvious)
+Pick a DIFFERENT search term and event than the examples (not COVID).'''
 
-Examples of valid seeds:
+        avoid_instruction = ""
+        if avoid_2019_2021_covid:
+            avoid_instruction = """
+
+Important: This session has already had puzzles from 2019-2021 or COVID-19. You MUST NOT use date range 2019-2021 (use e.g. 2007-2009, 2001-2003, 1980-1983) and you MUST NOT use COVID-19 pandemic as the correctEvent (use e.g. 2008 financial crisis, dot-com bust, early 1980s recession, oil crisis)."""
+
+        prompt = f"""You are helping create a single "causal guessr" puzzle. The puzzle shows a time-series chart. The player has 4 guesses; after each wrong guess they get the next hint. Do not give away the answer until the 4th hint.
+
+{source_instruction}{avoid_instruction}
+
+Examples (for format only; do not copy):
 {examples_str}
 
-Pick a series and date range that has a clear, famous causal story. Vary the event and series. Output only the JSON object for one puzzle seed."""
+Output exactly one JSON object (no other text, no markdown)."""
 
         client = OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
@@ -158,7 +215,13 @@ Pick a series and date range that has a clear, famous causal story. Vary the eve
                 text = match.group(1).strip()
 
         seed = json.loads(text)
-        required = ["seriesId", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
+        source = (seed.get("source") or "fred").strip().lower()
+        if source == "google_trends":
+            required = ["searchTerm", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
+        else:
+            source = "fred"
+            seed["source"] = "fred"
+            required = ["seriesId", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
         for k in required:
             if k not in seed:
                 raise ValueError(f"LLM seed missing key: {k}")
@@ -167,8 +230,9 @@ Pick a series and date range that has a clear, famous causal story. Vary the eve
         _ensure_hints(seed)
         seed["seed_source"] = "llm"
         logger.info(
-            "seed_source=llm seriesId=%s startDate=%s endDate=%s correctEvent=%s",
-            seed.get("seriesId"),
+            "seed_source=llm source=%s id=%s startDate=%s endDate=%s correctEvent=%s",
+            source,
+            seed.get("searchTerm") or seed.get("seriesId"),
             seed.get("startDate"),
             seed.get("endDate"),
             seed.get("correctEvent"),
@@ -182,10 +246,10 @@ Pick a series and date range that has a clear, famous causal story. Vary the eve
                 "OpenAI returned 429 (insufficient quota). Using fallback seed. "
                 "To use LLM-generated seeds: add a payment method at https://platform.openai.com/account/billing"
             )
-            return _random_seed_from_file()  # adds seed_source=fallback
+            return _random_seed_from_file(avoid_2019_2021_and_covid=avoid_2019_2021_covid)
         # 401/403: re-raise so you know the key is invalid
         if "401" in err_str or "403" in err_str:
             logger.warning("LLM seed generation failed (auth): %s", e)
             raise
         logger.warning("LLM seed generation failed, using fallback: %s", e, exc_info=False)
-        return _random_seed_from_file()
+        return _random_seed_from_file(avoid_2019_2021_and_covid=avoid_2019_2021_covid)
