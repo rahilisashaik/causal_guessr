@@ -218,29 +218,7 @@
       color: var(--muted);
       margin-bottom: 0.35rem;
     }
-    .preference-inner select {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.5rem 0.75rem;
-      font-size: 0.9rem;
-      color: var(--text);
-      font-family: inherit;
-      cursor: pointer;
-    }
-    .preference-inner select:focus {
-      outline: none;
-      border-color: var(--accent);
-    }
-    .preference-other {
-      margin-top: 0.5rem;
-      display: none;
-    }
-    .preference-other.visible {
-      display: block;
-    }
-    .preference-inner .preference-other input {
+    .preference-inner input {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -250,7 +228,7 @@
       color: var(--text);
       font-family: inherit;
     }
-    .preference-inner .preference-other input::placeholder {
+    .preference-inner input::placeholder {
       color: var(--muted);
     }
   </style>
@@ -263,18 +241,8 @@
     <details class="preference-details" id="preferenceDetails">
       <summary>Event preference (optional)</summary>
       <div class="preference-inner">
-        <label for="preferenceSelect">Applies to next puzzle</label>
-        <select id="preferenceSelect">
-          <option value="">No preference</option>
-          <option value="only events in the 20th century">Only 20th century events</option>
-          <option value="only events in the 21st century">Only 21st century events</option>
-          <option value="financial or economic crises (recessions, crashes, inflation)">Financial / economic crises</option>
-          <option value="historical events before 1950">Historical (pre-1950)</option>
-          <option value="other">Other (custom)</option>
-        </select>
-        <div class="preference-other" id="preferenceOtherWrap">
-          <input type="text" id="preferenceInput" placeholder="e.g. only events in the 20th century" autocomplete="off">
-        </div>
+        <label for="preferenceInput">Applies to next puzzle</label>
+        <input type="text" id="preferenceInput" placeholder="e.g. only events in the 20th century" autocomplete="off">
       </div>
     </details>
     <p class="chart-title" id="chartTitle">—</p>
@@ -307,19 +275,7 @@
     const nextWrap = document.getElementById('nextWrap');
     const nextBtn = document.getElementById('nextBtn');
     const attemptsEl = document.getElementById('attemptsEl');
-    const preferenceSelect = document.getElementById('preferenceSelect');
     const preferenceInput = document.getElementById('preferenceInput');
-    const preferenceOtherWrap = document.getElementById('preferenceOtherWrap');
-
-    preferenceSelect.addEventListener('change', () => {
-      preferenceOtherWrap.classList.toggle('visible', preferenceSelect.value === 'other');
-    });
-
-    function getPreference() {
-      const v = preferenceSelect ? preferenceSelect.value : '';
-      if (v === 'other') return (preferenceInput && preferenceInput.value.trim()) || '';
-      return v || '';
-    }
 
     let hasActiveGame = false;
     let attemptsLeft = 4;
@@ -342,7 +298,7 @@
       submitBtn.disabled = true;
       hasActiveGame = false;
       try {
-        const preference = getPreference();
+        const preference = (preferenceInput && preferenceInput.value.trim()) || '';
         const url = preference ? '/api/game/new?preference=' + encodeURIComponent(preference) : '/api/game/new';
         const r = await fetch(url);
         if (!r.ok) {
