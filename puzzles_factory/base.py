@@ -3,6 +3,7 @@ Abstract base for source-specific puzzle adapters.
 Each adapter knows how to fetch observations and build the canonical puzzle struct.
 """
 
+import math
 from abc import ABC, abstractmethod
 
 
@@ -45,17 +46,18 @@ class BasePuzzleAdapter(ABC):
     @staticmethod
     def _normalize_series(observations: list[dict]) -> list[dict]:
         """
-        Normalize observations: parse numeric values, drop missing (".").
-        Override in adapters if a source needs different handling.
+        Normalize observations: parse numeric values; use NaN for missing (".", "NA")
+        so the full date range is preserved (e.g. NBER with gaps).
         """
         out = []
         for ob in observations:
             val = ob.get("value", ".")
-            if val == "." or val is None:
+            if val == "." or val is None or (isinstance(val, str) and val.strip().upper() == "NA"):
+                out.append({"date": ob["date"], "value": math.nan})
                 continue
             try:
                 num = float(val)
             except (TypeError, ValueError):
-                num = val
+                num = math.nan
             out.append({"date": ob["date"], "value": num})
         return out

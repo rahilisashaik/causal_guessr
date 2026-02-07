@@ -44,13 +44,8 @@ def evaluate_guess_with_llm(
     others = [a for a in (acceptable_answers or []) if a and a.strip().lower() != correct_event.strip().lower()]
     others_str = ", ".join(others[:10]) if others else "none"
 
-    prompt = f"""The correct answer for this puzzle is: "{correct_event}".
-Other acceptable answers include: {others_str}.
-
-The user guessed: "{guess}"
-
-Is the user's guess correct? (Same event, same meaning, or an equivalent way to say the correct answer.)
-Reply with ONLY the word true or false, nothing else."""
+    from api.prompts import build_guess_evaluation_prompt
+    prompt = build_guess_evaluation_prompt(guess, correct_event, others_str)
 
     try:
         client = OpenAI(api_key=api_key)

@@ -21,7 +21,7 @@ class FredAdapter(BasePuzzleAdapter):
         if not series_id or not start or not end:
             raise ValueError("FRED data must include seriesId, startDate, endDate")
 
-        from api.fred_client import get_observations_cached
+        from api.fred import get_observations_cached
 
         return get_observations_cached(series_id, start, end)
 

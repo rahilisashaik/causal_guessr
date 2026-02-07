@@ -13,8 +13,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-# Load .env from project root (parent of api/) so FRED_API_KEY is available
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Load .env from project root (api/fred/client.py -> parent.parent.parent = project root)
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 

@@ -25,7 +25,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 logger = logging.getLogger(__name__)
 
 # Ensure investigation logs are visible (seed source, FRED 403, retries)
-for _log in ("api.seed_generator", "api.fred_client", "ui.app"):
+for _log in ("api.seed_generator", "api.fred", "ui.app"):
     logging.getLogger(_log).setLevel(logging.INFO)
 
 
@@ -38,6 +38,12 @@ def _slug_trends(keyword: str, start: str, end: str, index: int) -> str:
     """Unique id for a Google Trends puzzle (keyword may contain spaces)."""
     safe = (keyword or "").replace(" ", "_")[:30]
     return f"google_trends-{safe}-{start}-{end}-{index}"
+
+
+def _slug_nber(series_id: str, start: str, end: str, index: int) -> str:
+    """Unique id for an NBER Macrohistory puzzle."""
+    safe = (series_id or "").replace("/", "-")[:40]
+    return f"nber-{safe}-{start}-{end}-{index}"
 
 
 def _normalize_guess(guess: str) -> str:
@@ -99,7 +105,7 @@ def new_game():
 
     try:
         from api.seed_generator import generate_puzzle_seed
-        from api.fred_client import get_series
+        from api.fred import get_series
         from puzzles_factory import build_puzzle
         from visualization.plotter import plot_to_bytes
     except Exception as e:
@@ -144,6 +150,32 @@ def new_game():
                 },
             }
             log_id = keyword
+        elif source == "nber":
+            series_id = seed.get("seriesId") or ""
+            if not series_id:
+                last_error = ValueError("nber seed missing seriesId")
+                continue
+            pid = _slug_nber(series_id, start, end, 0)
+            try:
+                from api.nber import get_series_info
+                info = get_series_info(series_id)
+                title = (info.get("description") or "").strip() or f"NBER: {series_id}"
+            except Exception:
+                title = f"NBER: {series_id}"
+            metadata = {
+                "id": pid,
+                "source": "nber",
+                "title": title,
+                "correctEvent": seed["correctEvent"],
+                "acceptableAnswers": seed.get("acceptableAnswers") or [],
+                "explanation": seed.get("explanation") or "",
+                "data": {
+                    "seriesId": series_id,
+                    "startDate": start,
+                    "endDate": end,
+                },
+            }
+            log_id = series_id
         else:
             series_id = seed.get("seriesId") or ""
             if not series_id:

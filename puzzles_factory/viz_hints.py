@@ -20,6 +20,11 @@ def _default_viz_hints(source: str, metadata: dict) -> dict:
             "yLabel": "Search interest (0–100)",
             "yLimits": (0, 100),
         }
+    if source == "nber":
+        return {
+            "chartType": "line",
+            "yLabel": metadata.get("title") or "Value",
+        }
     return {
         "chartType": "line",
         "yLabel": metadata.get("title") or "Value",

@@ -28,6 +28,15 @@ FRED_SERIES_EXAMPLES = [
     "TCU", "CSUSHPISA", "PSAVERT", "MORTGAGE30US", "GDI", "A191RL1Q225SBEA",
 ]
 
+# NBER Macrohistory: chapter/filename (no .db). Data is 1860s–1940s.
+NBER_SERIES_EXAMPLES = [
+    "01/a01005a",  # Index of crop production
+    "01/a01001a",  # Total production index
+    "02/a02001a",  # Construction
+    "03/a03001a",  # Prices
+    "04/a04031a",  # Employment
+]
+
 FEW_SHOT_SEEDS = [
     {
         "seriesId": "UNRATE",
@@ -70,6 +79,21 @@ FEW_SHOT_SEEDS = [
             "Shortages and stockpiling drove interest in this everyday product.",
             "The event was a global health crisis with lockdowns.",
             "COVID-19 pandemic",
+        ],
+    },
+    {
+        "source": "nber",
+        "seriesId": "01/a01005a",
+        "startDate": "1929-01-01",
+        "endDate": "1933-12-31",
+        "correctEvent": "Great Depression",
+        "acceptableAnswers": ["great depression", "1929", "stock market crash", "depression"],
+        "explanation": "Crop production index fell during the Great Depression as demand and prices collapsed.",
+        "hints": [
+            "Consider a major global economic collapse that began in 1929.",
+            "Agricultural and industrial output dropped sharply in the early 1930s.",
+            "The event is often named after a year or a single word.",
+            "Great Depression",
         ],
     },
 ]
@@ -166,40 +190,23 @@ def generate_puzzle_seed(
         os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
     )
     try:
+        from api.prompts import build_puzzle_seed_prompt
+
         model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         examples_str = json.dumps(FEW_SHOT_SEEDS, indent=2)
-        series_list = ", ".join(FRED_SERIES_EXAMPLES)
+        requested_source = random.choice(["fred", "google_trends", "nber"])
+        series_list = (
+            ", ".join(NBER_SERIES_EXAMPLES)
+            if requested_source == "nber"
+            else ", ".join(FRED_SERIES_EXAMPLES)
+        )
 
-        # Randomly request one source so we get variety (avoid always getting the same example)
-        requested_source = random.choice(["fred", "google_trends"])
-
-        if requested_source == "fred":
-            source_instruction = f'''You MUST output a FRED seed with "source": "fred".
-- seriesId: from this list ONLY: {series_list}
-- startDate, endDate: YYYY-MM-DD
-- correctEvent, acceptableAnswers (list), explanation, hints (array of 4 strings, increasingly obvious)
-Pick a DIFFERENT series and date range than the examples (e.g. different recession, different event).'''
-        else:
-            source_instruction = '''You MUST output a Google Trends seed with "source": "google_trends".
-- searchTerm: a phrase people actually search (e.g. "face mask", "stimulus check", "vaccine", "inflation")
-- startDate, endDate: YYYY-MM-DD
-- correctEvent, acceptableAnswers (list), explanation, hints (array of 4 strings, increasingly obvious)
-Pick a DIFFERENT search term and event than the examples (not COVID).'''
-
-        avoid_instruction = ""
-        if avoid_2019_2021_covid:
-            avoid_instruction = """
-
-Important: This session has already had puzzles from 2019-2021 or COVID-19. You MUST NOT use date range 2019-2021 (use e.g. 2007-2009, 2001-2003, 1980-1983) and you MUST NOT use COVID-19 pandemic as the correctEvent (use e.g. 2008 financial crisis, dot-com bust, early 1980s recession, oil crisis)."""
-
-        prompt = f"""You are helping create a single "causal guessr" puzzle. The puzzle shows a time-series chart. The player has 4 guesses; after each wrong guess they get the next hint. Do not give away the answer until the 4th hint.
-
-{source_instruction}{avoid_instruction}
-
-Examples (for format only; do not copy):
-{examples_str}
-
-Output exactly one JSON object (no other text, no markdown)."""
+        prompt = build_puzzle_seed_prompt(
+            requested_source=requested_source,
+            series_list=series_list,
+            examples_str=examples_str,
+            avoid_2019_2021_covid=avoid_2019_2021_covid,
+        )
 
         client = OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
@@ -218,6 +225,8 @@ Output exactly one JSON object (no other text, no markdown)."""
         source = (seed.get("source") or "fred").strip().lower()
         if source == "google_trends":
             required = ["searchTerm", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
+        elif source == "nber":
+            required = ["seriesId", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
         else:
             source = "fred"
             seed["source"] = "fred"
@@ -232,7 +241,7 @@ Output exactly one JSON object (no other text, no markdown)."""
         logger.info(
             "seed_source=llm source=%s id=%s startDate=%s endDate=%s correctEvent=%s",
             source,
-            seed.get("searchTerm") or seed.get("seriesId"),
+            seed.get("searchTerm") or seed.get("seriesId") or "",
             seed.get("startDate"),
             seed.get("endDate"),
             seed.get("correctEvent"),

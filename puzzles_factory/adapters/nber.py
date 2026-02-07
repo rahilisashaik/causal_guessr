@@ -1,30 +1,28 @@
 """
-Google Trends adapter: fetch search interest via pytrends and build puzzle struct.
-Uses viz hints (Search interest 0–100, yLimits) from viz_hints.
+NBER Macrohistory adapter: fetch observations via cached NBER client and build puzzle struct.
 """
 
 from puzzles_factory.base import BasePuzzleAdapter
 from puzzles_factory.viz_hints import get_viz_hints
 
 
-class GoogleTrendsAdapter(BasePuzzleAdapter):
-    """Build puzzles from Google Trends (interest over time for a search term)."""
+class NberAdapter(BasePuzzleAdapter):
+    """Build puzzles from NBER Macrohistory .db series."""
 
     @property
     def source_id(self) -> str:
-        return "google_trends"
+        return "nber"
 
     def fetch_observations(self, data: dict) -> list[dict]:
-        keyword = data.get("searchTerm")
+        series_id = data.get("seriesId")
         start = data.get("startDate")
         end = data.get("endDate")
-        if not keyword or not start or not end:
-            raise ValueError("Google Trends data must include searchTerm, startDate, endDate")
+        if not series_id or not start or not end:
+            raise ValueError("NBER data must include seriesId, startDate, endDate")
 
-        from api.google_trends import get_interest_over_time_cached
+        from api.nber import get_observations_cached
 
-        geo = data.get("geo") or ""
-        return get_interest_over_time_cached(keyword, start, end, geo)
+        return get_observations_cached(series_id, start, end)
 
     def build_puzzle(self, metadata: dict, observations: list[dict]) -> dict:
         series = self._normalize_series(observations)

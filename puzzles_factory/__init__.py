@@ -9,9 +9,11 @@ from puzzles_factory.router import build_puzzle, register_adapter
 # Register built-in adapters so build_puzzle(metadata) works for known sources
 from puzzles_factory.adapters.fred import FredAdapter
 from puzzles_factory.adapters.google_trends import GoogleTrendsAdapter
+from puzzles_factory.adapters.nber import NberAdapter
 
 register_adapter(FredAdapter())
 register_adapter(GoogleTrendsAdapter())
+register_adapter(NberAdapter())
 
 __all__ = [
     "BasePuzzleAdapter",
