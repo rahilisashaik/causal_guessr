@@ -1,0 +1,16 @@
+"FRED_API_RESPONSE" = {
+    "series_id": [
+        {
+            "date": "2020-01-01",
+            "value": 100
+        },
+        {
+            "date": "2020-01-02",
+            "value": 101
+        }
+    ]
+}
+
+"FRED_USABLE_STUCT" = {
+    
+}

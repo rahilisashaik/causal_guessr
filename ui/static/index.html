@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Causal Guessr</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1a1a1a;
+      --border: #2a2a2a;
+      --text: #e8e8e8;
+      --muted: #888;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --correct: #22c55e;
+      --wrong: #ef4444;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.5rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      max-width: 720px;
+      width: 100%;
+    }
+    .chart-title {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+    .chart-wrap {
+      background: #111;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 280px;
+    }
+    .chart-wrap img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+    .guess-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .guess-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-size: 1rem;
+      color: var(--text);
+      font-family: inherit;
+    }
+    .guess-row input::placeholder {
+      color: var(--muted);
+    }
+    .guess-row input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .guess-row button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.25rem;
+      font-size: 1rem;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .guess-row button:hover {
+      background: var(--accent-hover);
+    }
+    .guess-row button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .result {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      display: none;
+    }
+    .result.visible {
+      display: block;
+    }
+    .result.correct {
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid var(--correct);
+      color: #86efac;
+    }
+    .result.wrong {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid var(--wrong);
+      color: #fca5a5;
+    }
+    .result strong {
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+    .loading {
+      color: var(--muted);
+      text-align: center;
+      padding: 2rem;
+    }
+    .error {
+      color: var(--wrong);
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+    .next-wrap {
+      margin-top: 1rem;
+      display: none;
+    }
+    .next-wrap.visible {
+      display: block;
+    }
+    .next-wrap button {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .next-wrap button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <h1>Causal Guessr</h1>
+  <p class="subtitle">What event caused this trend?</p>
+
+  <div class="card">
+    <p class="chart-title" id="chartTitle">—</p>
+    <div class="chart-wrap" id="chartWrap">
+      <span class="loading" id="chartLoading">Loading puzzle…</span>
+      <img id="chartImage" alt="Trend chart" style="display: none;">
+    </div>
+    <form id="guessForm">
+      <div class="guess-row">
+        <input type="text" id="guessInput" placeholder="Enter the event or cause…" autocomplete="off">
+        <button type="submit" id="submitBtn">Submit</button>
+      </div>
+    </form>
+    <div class="result" id="result"></div>
+    <div class="next-wrap" id="nextWrap">
+      <button type="button" id="nextBtn">Play again</button>
+    </div>
+  </div>
+
+  <script>
+    const chartTitle = document.getElementById('chartTitle');
+    const chartWrap = document.getElementById('chartWrap');
+    const chartLoading = document.getElementById('chartLoading');
+    const chartImage = document.getElementById('chartImage');
+    const guessForm = document.getElementById('guessForm');
+    const guessInput = document.getElementById('guessInput');
+    const submitBtn = document.getElementById('submitBtn');
+    const resultEl = document.getElementById('result');
+    const nextWrap = document.getElementById('nextWrap');
+    const nextBtn = document.getElementById('nextBtn');
+
+    let hasActiveGame = false;
+
+    async function loadNewGame() {
+      chartLoading.textContent = 'Generating puzzle…';
+      chartLoading.style.display = 'block';
+      chartImage.style.display = 'none';
+      resultEl.classList.remove('visible');
+      resultEl.textContent = '';
+      nextWrap.classList.remove('visible');
+      guessInput.value = '';
+      submitBtn.disabled = true;
+      hasActiveGame = false;
+      try {
+        const r = await fetch('/api/game/new');
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.detail || r.statusText || 'Failed to load game');
+        }
+        const data = await r.json();
+        hasActiveGame = true;
+        chartTitle.textContent = data.title;
+        chartImage.src = 'data:image/png;base64,' + data.imageBase64;
+        chartImage.onload = () => {
+          chartLoading.style.display = 'none';
+          chartImage.style.display = 'block';
+        };
+      } catch (e) {
+        chartLoading.textContent = e.message || 'Failed to load puzzle.';
+        chartLoading.style.display = 'block';
+      }
+      submitBtn.disabled = false;
+    }
+
+    guessForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const guess = guessInput.value.trim();
+      if (!guess || !hasActiveGame) return;
+      submitBtn.disabled = true;
+      resultEl.classList.remove('visible', 'correct', 'wrong');
+      try {
+        const r = await fetch('/api/game/guess', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guess }),
+        });
+        const data = await r.json();
+        resultEl.classList.add('visible', data.correct ? 'correct' : 'wrong');
+        resultEl.innerHTML = data.correct
+          ? '<strong>Correct!</strong>' + (data.explanation ? ' ' + data.explanation : '')
+          : '<strong>Not quite.</strong> The answer was: ' + data.correctEvent + (data.explanation ? '<br><br>' + data.explanation : '');
+        nextWrap.classList.add('visible');
+      } catch (err) {
+        resultEl.classList.add('visible', 'wrong');
+        resultEl.innerHTML = '<strong>Error</strong> submitting guess.';
+      }
+      submitBtn.disabled = false;
+    });
+
+    nextBtn.addEventListener('click', () => loadNewGame());
+
+    loadNewGame();
+  </script>
+</body>
+</html>
