@@ -58,9 +58,11 @@ def _check_guess(guess: str, acceptable: list[str]) -> bool:
 # Single current game in memory: set when /api/game/new succeeds; used by /api/game/guess
 _current_game: dict | None = None
 
-# Session counters: limit 2019-2021 and COVID seeds per server lifetime
+# Session counters: limit repeated events per server lifetime
 _session_2019_2021_count: int = 0
 _session_covid_count: int = 0
+_session_2008_count: int = 0
+_session_2001_count: int = 0
 
 
 app = FastAPI(title="Causal Guessr")
@@ -93,6 +95,16 @@ def _is_covid_event(correct_event: str) -> bool:
     return "covid" in (correct_event or "").lower() or "pandemic" in (correct_event or "").lower()
 
 
+def _is_2008_crisis_event(correct_event: str) -> bool:
+    e = (correct_event or "").lower()
+    return "2008" in e or "financial crisis" in e or "great recession" in e or "housing" in e or "subprime" in e or "lehman" in e
+
+
+def _is_2001_crisis_event(correct_event: str) -> bool:
+    e = (correct_event or "").lower()
+    return "2001" in e or "dot-com" in e or "dot com" in e or "9/11" in e or "tech bust" in e
+
+
 @app.get("/api/game/new")
 def new_game(preference: str | None = None):
     """
@@ -101,7 +113,7 @@ def new_game(preference: str | None = None):
     Optional query param: preference — user preference to tailor seed (e.g. "only 20th century events").
     Returns { id, title, imageBase64, seed_source, attempts_left }. On failure returns 503.
     """
-    global _current_game, _session_2019_2021_count, _session_covid_count
+    global _current_game, _session_2019_2021_count, _session_covid_count, _session_2008_count, _session_2001_count
 
     try:
         from api.seed_generator import generate_puzzle_seed
@@ -118,6 +130,8 @@ def new_game(preference: str | None = None):
             seed = generate_puzzle_seed(
                 session_2019_2021_count=_session_2019_2021_count,
                 session_covid_count=_session_covid_count,
+                session_2008_count=_session_2008_count,
+                session_2001_count=_session_2001_count,
                 user_preference=user_pref,
             )
         except Exception as e:
@@ -247,11 +261,15 @@ def new_game(preference: str | None = None):
             "attempts_left": 4,
         }
 
-        # Update session counters to minimize 2019-2021 and COVID in subsequent games
+        # Update session counters to minimize repetition of same events
         if _is_2019_2021(start, end):
             _session_2019_2021_count += 1
         if _is_covid_event(seed.get("correctEvent")):
             _session_covid_count += 1
+        if _is_2008_crisis_event(seed.get("correctEvent")):
+            _session_2008_count += 1
+        if _is_2001_crisis_event(seed.get("correctEvent")):
+            _session_2001_count += 1
 
         return {
             "id": _current_game["id"],
