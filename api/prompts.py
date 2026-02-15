@@ -16,6 +16,11 @@ ERA_SUGGESTIONS = [
     "Focus on a specific policy or shock (e.g. oil crisis, Fed rate cycle) rather than the same events every time.",
 ]
 
+# FRED API: typical date range for US macro series (many start 1948; end is real-time).
+# Per-series ranges vary; this keeps the LLM from picking dates outside common coverage.
+FRED_DATE_START = "1948-01-01"
+FRED_DATE_END_HINT = "the latest available (e.g. 2024-12-31 or current year)"
+
 # NBER Macrohistory: historical eras (1860s–1940s)
 NBER_ERA_SUGGESTIONS = [
     "Focus on 1929-1933: Great Depression, stock market crash.",
@@ -32,6 +37,7 @@ def build_puzzle_seed_prompt(
     series_list: str,
     examples_str: str,
     user_preference: str | None = None,
+    fred_releases_list: str | None = None,
 ) -> str:
     """
     Build the prompt for generating a single puzzle seed (FRED, Google Trends, or NBER).
@@ -45,9 +51,18 @@ def build_puzzle_seed_prompt(
     )
 
     if requested_source == "fred":
-        source_instruction = f'''You MUST output a FRED seed with "source": "fred".
-- seriesId: from this list ONLY: {series_list}
-- startDate, endDate: YYYY-MM-DD (must match the event's timeline)
+        discovery_instruction = ""
+        if fred_releases_list:
+            discovery_instruction = f"""
+- You MAY use discovery instead of seriesId. Choose ONE of:
+  A) seriesId: from this list ONLY: {series_list}
+  B) fredDiscovery: "search" and searchText: a topic (e.g. "unemployment rate", "housing starts", "industrial production"). Do not set seriesId.
+  C) fredDiscovery: "release" and releaseId: from this list (use the numeric id): {fred_releases_list}
+If using B or C, omit seriesId. If using A, omit fredDiscovery, searchText, and releaseId."""
+        else:
+            discovery_instruction = f"\n- seriesId: from this list ONLY: {series_list}"
+        source_instruction = f'''You MUST output a FRED seed with "source": "fred".{discovery_instruction}
+- startDate, endDate: YYYY-MM-DD. FRED date range: use dates between {FRED_DATE_START} and {FRED_DATE_END_HINT}. Do not use dates outside this range or the series will have no data.
 - correctEvent, acceptableAnswers (list), explanation, hints (array of 4 strings, increasingly obvious)
 
 Variety rules:
@@ -55,7 +70,6 @@ Variety rules:
 - Try to pick unique and unusual events (e.g. Panic of 1893, World War I, Great Depression), events like oil crash are too common, if you use these events, they should be unique in the way they occured.
 - The events should be able to be described by a name, not just a vague time period.
 - Prefer different events (e.g. 1980s recession, dot-com bust, 1990s recession, 2008 crisis) and vary the decade.
-- Get data dating back very far into the 1800s and 1700s
 - This time: {era_hint}'''
     elif requested_source == "nber":
         source_instruction = f'''You MUST output an NBER Macrohistory seed with "source": "nber".

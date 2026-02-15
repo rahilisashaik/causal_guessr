@@ -176,12 +176,25 @@ def generate_puzzle_seed(
             if requested_source == "nber"
             else ", ".join(FRED_SERIES_EXAMPLES)
         )
+        fred_releases_list = None
+        if requested_source == "fred":
+            try:
+                from api.fred import get_releases_cached
+                releases = get_releases_cached()
+                # Format as "id: name" for prompt (limit to 40 to keep prompt size reasonable)
+                fred_releases_list = ", ".join(
+                    f'{r.get("id", r.get("release_id", ""))}: {r.get("name", "")}'
+                    for r in releases[:40]
+                ) or None
+            except Exception:
+                fred_releases_list = None
 
         prompt = build_puzzle_seed_prompt(
             requested_source=requested_source,
             series_list=series_list,
             examples_str=examples_str,
             user_preference=user_preference,
+            fred_releases_list=fred_releases_list,
         )
 
         client = OpenAI(api_key=api_key)
@@ -206,10 +219,24 @@ def generate_puzzle_seed(
         else:
             source = "fred"
             seed["source"] = "fred"
-            required = ["seriesId", "startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
-        for k in required:
-            if k not in seed:
-                raise ValueError(f"LLM seed missing key: {k}")
+            required = ["startDate", "endDate", "correctEvent", "acceptableAnswers", "explanation"]
+            for k in required:
+                if k not in seed:
+                    raise ValueError(f"LLM seed missing key: {k}")
+            discovery = (seed.get("fredDiscovery") or "").strip().lower()
+            if discovery:
+                if discovery == "search" and not (seed.get("searchText") or "").strip():
+                    raise ValueError("LLM FRED seed fredDiscovery=search missing searchText")
+                if discovery == "release":
+                    rid = seed.get("releaseId") or seed.get("release_id")
+                    if rid is None or (isinstance(rid, (int, float)) and rid <= 0):
+                        raise ValueError("LLM FRED seed fredDiscovery=release missing or invalid releaseId")
+            elif not (seed.get("seriesId") or "").strip():
+                raise ValueError("LLM FRED seed missing seriesId (or fredDiscovery + searchText/releaseId)")
+        if source in ("google_trends", "nber"):
+            for k in required:
+                if k not in seed:
+                    raise ValueError(f"LLM seed missing key: {k}")
         if not isinstance(seed["acceptableAnswers"], list):
             seed["acceptableAnswers"] = [seed["acceptableAnswers"]]
         _ensure_hints(seed)

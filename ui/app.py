@@ -62,6 +62,9 @@ _current_game: dict | None = None
 _session_displayed_intervals: list[tuple[str, str]] = []
 _session_displayed_metrics: set[str] = set()
 
+# Seed produced by GET /api/game/seed; consumed by POST /api/game/build for stage-based loading UI
+_pending_seed: dict | None = None
+
 
 def _intervals_overlap(start: str, end: str, intervals: list[tuple[str, str]]) -> bool:
     """True if (start, end) overlaps any (a_start, a_end) in intervals. YYYY-MM-DD string comparison."""
@@ -85,6 +88,16 @@ def _metric_key(seed: dict) -> str:
 app = FastAPI(title="Causal Guessr")
 
 
+@app.on_event("startup")
+def startup_cache_fred_releases():
+    """Cache FRED releases at startup for release-based seed discovery."""
+    try:
+        from api.fred import get_releases_cached
+        get_releases_cached()
+    except Exception as e:
+        logger.warning("Startup FRED releases cache failed (release discovery may be empty): %s", e)
+
+
 @app.get("/api/debug/openai")
 def debug_openai_key():
     """
@@ -104,26 +117,57 @@ def debug_openai_key():
 _MAX_SEED_RETRIES = 5  # try up to this many seeds when FRED/Trends fails
 
 
-@app.get("/api/game/new")
-def new_game(preference: str | None = None):
+def _resolve_fred_discovery(seed: dict) -> None:
     """
-    Generate one puzzle via LLM (seed) + FRED/Google Trends/NBER, render chart, set as current game.
-    If fetch fails, retries with a new seed (up to _MAX_SEED_RETRIES).
-    Optional query param: preference — user preference to tailor seed (e.g. "only 20th century events").
-    Returns { id, title, imageBase64, seed_source, attempts_left }. On failure returns 503.
+    If seed has fredDiscovery "search" or "release", resolve to a seriesId (mutates seed).
+    Raises ValueError if discovery params missing or no series found for the date range.
     """
-    global _current_game, _session_displayed_intervals, _session_displayed_metrics
+    discovery = (seed.get("fredDiscovery") or "").strip().lower()
+    if not discovery:
+        return
+    start = seed.get("startDate") or ""
+    end = seed.get("endDate") or ""
+    if not start or not end:
+        raise ValueError("FRED discovery seed missing startDate or endDate")
+    series_list: list[dict] = []
+    if discovery == "search":
+        search_text = (seed.get("searchText") or "").strip()
+        if not search_text:
+            raise ValueError("FRED discovery=search missing searchText")
+        from api.fred import search_series
+        series_list = search_series(search_text, limit=50)
+    elif discovery == "release":
+        try:
+            release_id = int(seed.get("releaseId") or seed.get("release_id") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("FRED discovery=release missing or invalid releaseId")
+        if release_id <= 0:
+            raise ValueError("FRED discovery=release missing releaseId")
+        from api.fred import get_release_series
+        series_list = get_release_series(release_id, limit=500)
+    else:
+        return
+    # Keep series that cover [start, end]: observation_start <= end and observation_end >= start
+    valid = [
+        s for s in series_list
+        if (s.get("observation_start") or "") <= end and (s.get("observation_end") or "0000") >= start
+    ]
+    if not valid:
+        raise ValueError(
+            f"No FRED series found for {discovery} covering {start} to {end}"
+        )
+    # Prefer by popularity (desc), then take first
+    valid.sort(key=lambda s: -(s.get("popularity") or 0))
+    chosen = valid[0]
+    seed["seriesId"] = chosen.get("id") or chosen.get("series_id")
+    if not seed["seriesId"]:
+        raise ValueError("FRED series object missing id")
 
-    try:
-        from api.seed_generator import generate_puzzle_seed
-        from api.fred import get_series
-        from puzzles_factory import build_puzzle
-        from visualization.plotter import plot_to_bytes
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Setup error: {e!s}") from e
 
-    user_pref = (preference or "").strip() or None
-    last_error = None
+def _get_valid_seed(user_pref: str | None) -> dict:
+    """Return a seed that passes session overlap and metric checks. Raises HTTPException after max retries."""
+    from api.seed_generator import generate_puzzle_seed
+
     for attempt in range(1, _MAX_SEED_RETRIES + 1):
         try:
             seed = generate_puzzle_seed(user_preference=user_pref)
@@ -132,123 +176,203 @@ def new_game(preference: str | None = None):
                 status_code=503,
                 detail=f"Could not generate puzzle seed: {e!s}",
             ) from e
-
-        source = seed.get("source", "fred")
         start = seed["startDate"]
         end = seed["endDate"]
-
         if _intervals_overlap(start, end, _session_displayed_intervals):
             continue
         if _metric_key(seed) in _session_displayed_metrics:
             continue
+        return seed
+    raise HTTPException(
+        status_code=503,
+        detail="Could not generate a puzzle seed that passes session diversity checks after max retries.",
+    )
 
-        if source == "google_trends":
-            keyword = seed.get("searchTerm") or ""
-            if not keyword:
-                last_error = ValueError("google_trends seed missing searchTerm")
-                continue
-            pid = _slug_trends(keyword, start, end, 0)
-            title = f"Search: {keyword}"
-            metadata = {
-                "id": pid,
-                "source": "google_trends",
-                "title": title,
-                "correctEvent": seed["correctEvent"],
-                "acceptableAnswers": seed.get("acceptableAnswers") or [],
-                "explanation": seed.get("explanation") or "",
-                "data": {
-                    "searchTerm": keyword,
-                    "startDate": start,
-                    "endDate": end,
-                    "geo": seed.get("geo") or "",
-                },
-            }
-            log_id = keyword
-        elif source == "nber":
-            series_id = seed.get("seriesId") or ""
-            if not series_id:
-                last_error = ValueError("nber seed missing seriesId")
-                continue
-            pid = _slug_nber(series_id, start, end, 0)
-            try:
-                from api.nber import get_series_info
-                info = get_series_info(series_id)
-                title = (info.get("description") or "").strip() or f"NBER: {series_id}"
-            except Exception:
-                title = f"NBER: {series_id}"
-            metadata = {
-                "id": pid,
-                "source": "nber",
-                "title": title,
-                "correctEvent": seed["correctEvent"],
-                "acceptableAnswers": seed.get("acceptableAnswers") or [],
-                "explanation": seed.get("explanation") or "",
-                "data": {
-                    "seriesId": series_id,
-                    "startDate": start,
-                    "endDate": end,
-                },
-            }
-            log_id = series_id
-        else:
-            series_id = seed.get("seriesId") or ""
-            if not series_id:
-                last_error = ValueError("fred seed missing seriesId")
-                continue
-            pid = _slug(series_id, start, end, 0)
-            title = series_id
-            try:
-                info = get_series(series_id)
-                title = info.get("title", series_id)
-            except Exception:
-                pass
-            metadata = {
-                "id": pid,
-                "source": "fred",
-                "title": title,
-                "correctEvent": seed["correctEvent"],
-                "acceptableAnswers": seed.get("acceptableAnswers") or [],
-                "explanation": seed.get("explanation") or "",
-                "data": {
-                    "seriesId": series_id,
-                    "startDate": start,
-                    "endDate": end,
-                },
-            }
-            log_id = series_id
 
+def _metadata_and_title_from_seed(seed: dict) -> tuple[dict, str, str]:
+    """Build puzzle metadata and title from a seed. Returns (metadata, title, log_id). Raises on invalid seed."""
+    from api.fred import get_series
+
+    source = seed.get("source", "fred")
+    start = seed["startDate"]
+    end = seed["endDate"]
+
+    if source == "google_trends":
+        keyword = seed.get("searchTerm") or ""
+        if not keyword:
+            raise ValueError("google_trends seed missing searchTerm")
+        pid = _slug_trends(keyword, start, end, 0)
+        title = f"Search: {keyword}"
+        metadata = {
+            "id": pid,
+            "source": "google_trends",
+            "title": title,
+            "correctEvent": seed["correctEvent"],
+            "acceptableAnswers": seed.get("acceptableAnswers") or [],
+            "explanation": seed.get("explanation") or "",
+            "data": {
+                "searchTerm": keyword,
+                "startDate": start,
+                "endDate": end,
+                "geo": seed.get("geo") or "",
+            },
+        }
+        return metadata, title, keyword
+    if source == "nber":
+        series_id = seed.get("seriesId") or ""
+        if not series_id:
+            raise ValueError("nber seed missing seriesId")
+        pid = _slug_nber(series_id, start, end, 0)
+        try:
+            from api.nber import get_series_info
+            info = get_series_info(series_id)
+            title = (info.get("description") or "").strip() or f"NBER: {series_id}"
+        except Exception:
+            title = f"NBER: {series_id}"
+        metadata = {
+            "id": pid,
+            "source": "nber",
+            "title": title,
+            "correctEvent": seed["correctEvent"],
+            "acceptableAnswers": seed.get("acceptableAnswers") or [],
+            "explanation": seed.get("explanation") or "",
+            "data": {"seriesId": series_id, "startDate": start, "endDate": end},
+        }
+        return metadata, title, series_id
+    # fred
+    series_id = seed.get("seriesId") or ""
+    if not series_id:
+        raise ValueError("fred seed missing seriesId")
+    pid = _slug(series_id, start, end, 0)
+    title = series_id
+    try:
+        info = get_series(series_id)
+        title = info.get("title", series_id)
+    except Exception:
+        pass
+    metadata = {
+        "id": pid,
+        "source": "fred",
+        "title": title,
+        "correctEvent": seed["correctEvent"],
+        "acceptableAnswers": seed.get("acceptableAnswers") or [],
+        "explanation": seed.get("explanation") or "",
+        "data": {"seriesId": series_id, "startDate": start, "endDate": end},
+    }
+    return metadata, title, series_id
+
+
+@app.get("/api/game/seed")
+def get_seed(preference: str | None = None):
+    """
+    Generate a puzzle seed that passes session diversity checks and store it for POST /api/game/build.
+    Frontend can show "Generating puzzle seed..." during this call.
+    Returns { "status": "ok" }. On failure returns 503.
+    """
+    global _pending_seed
+    try:
+        _pending_seed = _get_valid_seed((preference or "").strip() or None)
+    except HTTPException:
+        raise
+    return {"status": "ok"}
+
+
+class BuildBody(BaseModel):
+    preference: str | None = None
+
+
+@app.post("/api/game/build")
+def build_game(body: BuildBody | None = None):
+    """
+    Build the puzzle from the seed stored by GET /api/game/seed (fetch data, render chart), set current game.
+    Frontend can show "Fetching economic data..." during this call.
+    Call GET /api/game/seed first. Optional body.preference used when retrying with a new seed on fetch failure.
+    Returns { id, title, imageBase64, seed_source, attempts_left }. On failure returns 503.
+    """
+    global _current_game, _pending_seed, _session_displayed_intervals, _session_displayed_metrics
+
+    try:
+        from puzzles_factory import build_puzzle
+        from visualization.plotter import plot_to_bytes
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Setup error: {e!s}") from e
+
+    user_pref = (body.preference if body else None) or ""
+    user_pref = (user_pref or "").strip() or None
+    last_error = None
+
+    for attempt in range(1, _MAX_SEED_RETRIES + 1):
+        seed = _pending_seed
+        if seed is None:
+            if attempt == 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="No pending seed. Call GET /api/game/seed first.",
+                )
+            try:
+                seed = _get_valid_seed(user_pref)
+                _pending_seed = seed
+            except HTTPException:
+                raise
+        source = seed.get("source", "fred")
+        start = seed["startDate"]
+        end = seed["endDate"]
+        if _intervals_overlap(start, end, _session_displayed_intervals) or _metric_key(seed) in _session_displayed_metrics:
+            _pending_seed = None
+            if attempt < _MAX_SEED_RETRIES:
+                try:
+                    seed = _get_valid_seed(user_pref)
+                    _pending_seed = seed
+                except HTTPException:
+                    raise
+                continue
+            raise HTTPException(status_code=503, detail="Seed no longer valid for session. Call GET /api/game/seed again.")
+        if (source or "fred").strip().lower() == "fred" and seed.get("fredDiscovery"):
+            try:
+                _resolve_fred_discovery(seed)
+            except ValueError as e:
+                last_error = e
+                _pending_seed = None
+                logger.warning("build_game attempt=%s FRED discovery resolve failed: %s", attempt, e)
+                if attempt < _MAX_SEED_RETRIES:
+                    try:
+                        seed = _get_valid_seed(user_pref)
+                        _pending_seed = seed
+                    except HTTPException:
+                        raise
+                continue
+        try:
+            metadata, title, log_id = _metadata_and_title_from_seed(seed)
+        except ValueError as e:
+            last_error = e
+            _pending_seed = None
+            logger.warning("build_game attempt=%s metadata from seed failed: %s", attempt, e)
+            continue
         logger.info(
-            "new_game attempt=%s/%s source=%s id=%s startDate=%s endDate=%s",
-            attempt,
-            _MAX_SEED_RETRIES,
-            source,
-            log_id,
-            start,
-            end,
+            "build_game attempt=%s/%s source=%s id=%s startDate=%s endDate=%s",
+            attempt, _MAX_SEED_RETRIES, source, log_id, start, end,
         )
-
         try:
             puzzle = build_puzzle(metadata)
             png_bytes = plot_to_bytes(puzzle)
         except Exception as e:
             last_error = e
-            logger.warning(
-                "new_game attempt=%s/%s failed source=%s id=%s error=%s",
-                attempt,
-                _MAX_SEED_RETRIES,
-                source,
-                log_id,
-                e,
-            )
+            _pending_seed = None
+            logger.warning("build_game attempt=%s/%s failed source=%s id=%s error=%s", attempt, _MAX_SEED_RETRIES, source, log_id, e)
+            if attempt < _MAX_SEED_RETRIES:
+                try:
+                    seed = _get_valid_seed(user_pref)
+                    _pending_seed = seed
+                except HTTPException:
+                    raise
             continue
-
         image_b64 = base64.standard_b64encode(png_bytes).decode("ascii")
         seed_source = seed.get("seed_source", "unknown")
         hints = list(seed.get("hints") or [])[:4]
         while len(hints) < 4:
             hints.append(seed.get("correctEvent") or "The correct event.")
         _current_game = {
-            "id": pid,
+            "id": metadata["id"],
             "title": title,
             "imageBase64": image_b64,
             "correctEvent": seed["correctEvent"],
@@ -258,10 +382,9 @@ def new_game(preference: str | None = None):
             "hints": hints,
             "attempts_left": 4,
         }
-
         _session_displayed_intervals.append((start, end))
         _session_displayed_metrics.add(_metric_key(seed))
-
+        _pending_seed = None
         return {
             "id": _current_game["id"],
             "title": _current_game["title"],
@@ -269,11 +392,21 @@ def new_game(preference: str | None = None):
             "seed_source": seed_source,
             "attempts_left": 4,
         }
-
     raise HTTPException(
         status_code=503,
         detail=f"Could not fetch or render chart after {_MAX_SEED_RETRIES} tries. Last error: {last_error!s}",
     )
+
+
+@app.get("/api/game/new")
+def new_game(preference: str | None = None):
+    """
+    One-shot: generate seed and build puzzle (same as GET /api/game/seed then POST /api/game/build).
+    Kept for backward compatibility. Prefer the two-step flow for stage-based loading messages.
+    """
+    global _pending_seed
+    get_seed(preference)
+    return build_game(BuildBody(preference=preference))
 
 
 class GuessBody(BaseModel):

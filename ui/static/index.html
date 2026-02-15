@@ -299,7 +299,6 @@
     }
 
     async function loadNewGame() {
-      chartLoading.textContent = 'Generating puzzle…';
       chartLoading.style.display = 'block';
       chartImage.style.display = 'none';
       resultEl.classList.remove('visible');
@@ -310,15 +309,28 @@
       submitBtn.disabled = true;
       if (skipBtn) skipBtn.disabled = true;
       hasActiveGame = false;
+      const preference = (preferenceInput && preferenceInput.value.trim()) || '';
+
       try {
-        const preference = (preferenceInput && preferenceInput.value.trim()) || '';
-        const url = preference ? '/api/game/new?preference=' + encodeURIComponent(preference) : '/api/game/new';
-        const r = await fetch(url);
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.detail || r.statusText || 'Failed to load game');
+        chartLoading.textContent = 'Generating puzzle seed…';
+        const seedUrl = preference ? '/api/game/seed?preference=' + encodeURIComponent(preference) : '/api/game/seed';
+        const seedRes = await fetch(seedUrl);
+        if (!seedRes.ok) {
+          const err = await seedRes.json().catch(() => ({}));
+          throw new Error(err.detail || seedRes.statusText || 'Failed to generate seed');
         }
-        const data = await r.json();
+
+        chartLoading.textContent = 'Fetching economic data…';
+        const buildRes = await fetch('/api/game/build', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preference: preference || null }),
+        });
+        if (!buildRes.ok) {
+          const err = await buildRes.json().catch(() => ({}));
+          throw new Error(err.detail || buildRes.statusText || 'Failed to load puzzle');
+        }
+        const data = await buildRes.json();
         hasActiveGame = true;
         setAttempts(data.attempts_left ?? 4);
         chartTitle.textContent = data.title;

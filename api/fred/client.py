@@ -18,10 +18,16 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
-FRED_SERIES_URL = "https://api.stlouisfed.org/fred/series"
+FRED_BASE = "https://api.stlouisfed.org/fred"
+FRED_OBSERVATIONS_URL = f"{FRED_BASE}/series/observations"
+FRED_SERIES_URL = f"{FRED_BASE}/series"
+FRED_SERIES_SEARCH_URL = f"{FRED_BASE}/series/search"
+FRED_RELEASES_URL = f"{FRED_BASE}/releases"
+FRED_RELEASE_SERIES_URL = f"{FRED_BASE}/release/series"
 
 _keys_list: list[str] | None = None
+_releases_cache: list[dict] | None = None
+_releases_cache_lock = threading.Lock()
 _keys_lock = threading.Lock()
 _key_index = 0
 
@@ -53,6 +59,42 @@ def _next_key() -> str:
         key = keys[_key_index % len(keys)]
         _key_index += 1
         return key
+
+
+def _request(
+    url: str,
+    params: dict,
+    *,
+    api_key: str | None = None,
+    log_label: str = "FRED",
+) -> dict:
+    """GET url with params; try api_key then Bearer on 403. Returns JSON body. Raises on non-200."""
+    keys = _get_keys()
+    if not keys and not api_key:
+        raise ValueError(
+            "FRED API key required. Set FRED_API_KEY or FRED_API_KEYS in the environment."
+        )
+    if api_key:
+        keys_to_try = [api_key]
+    else:
+        first = _next_key()
+        keys_to_try = [first] + [k for k in keys if k != first]
+    last_error = None
+    for key_idx, key in enumerate(keys_to_try):
+        p = {**params, "api_key": key, "file_type": "json"}
+        resp = requests.get(url, params=p, timeout=30)
+        if resp.status_code == 403:
+            p.pop("api_key", None)
+            resp = requests.get(url, params=p, headers={"Authorization": f"Bearer {key}"}, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 403:
+            logger.warning("%s 403 key_index=%s/%s", log_label, key_idx + 1, len(keys_to_try))
+        last_error = resp
+    if last_error is not None:
+        logger.error("%s failed status=%s", log_label, last_error.status_code)
+        last_error.raise_for_status()
+    raise ValueError("FRED API key required. Set FRED_API_KEY or FRED_API_KEYS.")
 
 
 def get_observations(
@@ -229,3 +271,63 @@ def get_series(series_id: str, *, api_key: str | None = None) -> dict:
         )
         last_error.raise_for_status()
     raise ValueError("FRED API key required. Set FRED_API_KEY or FRED_API_KEYS.")
+
+
+def search_series(
+    search_text: str,
+    *,
+    limit: int = 50,
+    api_key: str | None = None,
+) -> list[dict]:
+    """
+    Search FRED series by text. Returns list of series dicts (id, title, observation_start, observation_end, etc.).
+    """
+    data = _request(
+        FRED_SERIES_SEARCH_URL,
+        {"search_text": search_text, "limit": limit},
+        api_key=api_key,
+        log_label="FRED search",
+    )
+    return data.get("seriess", [])
+
+
+def get_releases(*, api_key: str | None = None) -> list[dict]:
+    """Fetch all FRED releases. Returns list of dicts with id, name, etc."""
+    data = _request(
+        FRED_RELEASES_URL,
+        {},
+        api_key=api_key,
+        log_label="FRED releases",
+    )
+    return data.get("releases", [])
+
+
+def get_releases_cached(*, api_key: str | None = None) -> list[dict]:
+    """Return cached list of FRED releases; fetch once and cache at first call (e.g. app startup)."""
+    global _releases_cache
+    with _releases_cache_lock:
+        if _releases_cache is not None:
+            return _releases_cache
+        try:
+            _releases_cache = get_releases(api_key=api_key)
+            logger.info("FRED releases cached count=%s", len(_releases_cache))
+        except Exception as e:
+            logger.warning("FRED get_releases failed, cache empty: %s", e)
+            _releases_cache = []
+        return _releases_cache
+
+
+def get_release_series(
+    release_id: int,
+    *,
+    limit: int = 1000,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Fetch series in a FRED release. Returns list of series dicts (id, title, observation_start, observation_end, etc.)."""
+    data = _request(
+        FRED_RELEASE_SERIES_URL,
+        {"release_id": release_id, "limit": limit},
+        api_key=api_key,
+        log_label="FRED release/series",
+    )
+    return data.get("seriess", [])
