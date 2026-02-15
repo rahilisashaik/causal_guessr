@@ -58,11 +58,28 @@ def _check_guess(guess: str, acceptable: list[str]) -> bool:
 # Single current game in memory: set when /api/game/new succeeds; used by /api/game/guess
 _current_game: dict | None = None
 
-# Session counters: limit repeated events per server lifetime
-_session_2019_2021_count: int = 0
-_session_covid_count: int = 0
-_session_2008_count: int = 0
-_session_2001_count: int = 0
+# Session state: avoid repeating time intervals or y-axis metrics per server lifetime
+_session_displayed_intervals: list[tuple[str, str]] = []
+_session_displayed_metrics: set[str] = set()
+
+
+def _intervals_overlap(start: str, end: str, intervals: list[tuple[str, str]]) -> bool:
+    """True if (start, end) overlaps any (a_start, a_end) in intervals. YYYY-MM-DD string comparison."""
+    for a_start, a_end in intervals:
+        if start <= a_end and a_start <= end:
+            return True
+    return False
+
+
+def _metric_key(seed: dict) -> str:
+    """Canonical key for the y-axis metric: fred:seriesId, google_trends:searchTerm (normalized), nber:seriesId."""
+    source = (seed.get("source") or "fred").strip().lower()
+    if source == "google_trends":
+        term = (seed.get("searchTerm") or "").strip().lower()
+        return f"google_trends:{term}"
+    if source == "nber":
+        return f"nber:{seed.get('seriesId') or ''}"
+    return f"fred:{seed.get('seriesId') or ''}"
 
 
 app = FastAPI(title="Causal Guessr")
@@ -87,24 +104,6 @@ def debug_openai_key():
 _MAX_SEED_RETRIES = 5  # try up to this many seeds when FRED/Trends fails
 
 
-def _is_2019_2021(start: str, end: str) -> bool:
-    return start <= "2021-12-31" and end >= "2019-01-01"
-
-
-def _is_covid_event(correct_event: str) -> bool:
-    return "covid" in (correct_event or "").lower() or "pandemic" in (correct_event or "").lower()
-
-
-def _is_2008_crisis_event(correct_event: str) -> bool:
-    e = (correct_event or "").lower()
-    return "2008" in e or "financial crisis" in e or "great recession" in e or "housing" in e or "subprime" in e or "lehman" in e
-
-
-def _is_2001_crisis_event(correct_event: str) -> bool:
-    e = (correct_event or "").lower()
-    return "2001" in e or "dot-com" in e or "dot com" in e or "9/11" in e or "tech bust" in e
-
-
 @app.get("/api/game/new")
 def new_game(preference: str | None = None):
     """
@@ -113,7 +112,7 @@ def new_game(preference: str | None = None):
     Optional query param: preference — user preference to tailor seed (e.g. "only 20th century events").
     Returns { id, title, imageBase64, seed_source, attempts_left }. On failure returns 503.
     """
-    global _current_game, _session_2019_2021_count, _session_covid_count, _session_2008_count, _session_2001_count
+    global _current_game, _session_displayed_intervals, _session_displayed_metrics
 
     try:
         from api.seed_generator import generate_puzzle_seed
@@ -127,13 +126,7 @@ def new_game(preference: str | None = None):
     last_error = None
     for attempt in range(1, _MAX_SEED_RETRIES + 1):
         try:
-            seed = generate_puzzle_seed(
-                session_2019_2021_count=_session_2019_2021_count,
-                session_covid_count=_session_covid_count,
-                session_2008_count=_session_2008_count,
-                session_2001_count=_session_2001_count,
-                user_preference=user_pref,
-            )
+            seed = generate_puzzle_seed(user_preference=user_pref)
         except Exception as e:
             raise HTTPException(
                 status_code=503,
@@ -143,6 +136,11 @@ def new_game(preference: str | None = None):
         source = seed.get("source", "fred")
         start = seed["startDate"]
         end = seed["endDate"]
+
+        if _intervals_overlap(start, end, _session_displayed_intervals):
+            continue
+        if _metric_key(seed) in _session_displayed_metrics:
+            continue
 
         if source == "google_trends":
             keyword = seed.get("searchTerm") or ""
@@ -261,15 +259,8 @@ def new_game(preference: str | None = None):
             "attempts_left": 4,
         }
 
-        # Update session counters to minimize repetition of same events
-        if _is_2019_2021(start, end):
-            _session_2019_2021_count += 1
-        if _is_covid_event(seed.get("correctEvent")):
-            _session_covid_count += 1
-        if _is_2008_crisis_event(seed.get("correctEvent")):
-            _session_2008_count += 1
-        if _is_2001_crisis_event(seed.get("correctEvent")):
-            _session_2001_count += 1
+        _session_displayed_intervals.append((start, end))
+        _session_displayed_metrics.add(_metric_key(seed))
 
         return {
             "id": _current_game["id"],

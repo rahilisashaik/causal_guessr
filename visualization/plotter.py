@@ -91,7 +91,7 @@ def plot(
     ax.set_ylabel(y_label)
     if y_limits is not None:
         ax.set_ylim(*y_limits)
-    ax.set_title(title if title is not None else puzzle.get("title", ""))
+    # ax.set_title(title if title is not None else puzzle.get("title", ""))
 
     fig.tight_layout()
 

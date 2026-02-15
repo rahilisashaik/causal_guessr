@@ -116,36 +116,7 @@ def _ensure_hints(seed: dict) -> dict:
     return seed
 
 
-def _is_2019_2021(start: str, end: str) -> bool:
-    """True if date range overlaps 2019-2021."""
-    if not start or not end:
-        return False
-    return start <= "2021-12-31" and end >= "2019-01-01"
-
-
-def _is_covid_event(correct_event: str) -> bool:
-    """True if correctEvent is COVID-related."""
-    return "covid" in (correct_event or "").lower() or "pandemic" in (correct_event or "").lower()
-
-
-def _is_2008_crisis_event(correct_event: str) -> bool:
-    """True if correctEvent is 2008 financial crisis / Great Recession."""
-    e = (correct_event or "").lower()
-    return "2008" in e or "financial crisis" in e or "great recession" in e or "housing" in e or "subprime" in e or "lehman" in e
-
-
-def _is_2001_crisis_event(correct_event: str) -> bool:
-    """True if correctEvent is 2001 recession / dot-com bust / 9/11."""
-    e = (correct_event or "").lower()
-    return "2001" in e or "dot-com" in e or "dot com" in e or "9/11" in e or "tech bust" in e
-
-
-def _random_seed_from_file(
-    *,
-    avoid_2019_2021_and_covid: bool = False,
-    avoid_2008: bool = False,
-    avoid_2001: bool = False,
-) -> dict:
+def _random_seed_from_file() -> dict:
     """Return a random puzzle seed from puzzle_seeds.json. Raises if file missing or empty."""
     if not PUZZLE_SEEDS_PATH.exists():
         raise FileNotFoundError("puzzle_seeds.json not found")
@@ -153,21 +124,6 @@ def _random_seed_from_file(
         seeds = json.load(f)
     if not seeds:
         raise ValueError("puzzle_seeds.json is empty")
-    if avoid_2019_2021_and_covid or avoid_2008 or avoid_2001:
-        def skip(s):
-            if avoid_2019_2021_and_covid and (
-                _is_2019_2021(s.get("startDate") or "", s.get("endDate") or "")
-                or _is_covid_event(s.get("correctEvent"))
-            ):
-                return True
-            if avoid_2008 and _is_2008_crisis_event(s.get("correctEvent")):
-                return True
-            if avoid_2001 and _is_2001_crisis_event(s.get("correctEvent")):
-                return True
-            return False
-        preferred = [s for s in seeds if not skip(s)]
-        if preferred:
-            seeds = preferred
     seed = random.choice(seeds)
     if not isinstance(seed.get("acceptableAnswers"), list):
         seed["acceptableAnswers"] = [seed["acceptableAnswers"]] if seed.get("acceptableAnswers") else []
@@ -185,28 +141,17 @@ def _random_seed_from_file(
 
 def generate_puzzle_seed(
     *,
-    session_2019_2021_count: int = 0,
-    session_covid_count: int = 0,
-    session_2008_count: int = 0,
-    session_2001_count: int = 0,
     user_preference: str | None = None,
 ) -> dict:
     """
     Produce one puzzle seed: try LLM (OpenAI) first; on failure (quota, no key, etc.)
     fall back to a random seed from puzzle_seeds.json.
-    When session counts >= 1, bias away from those events (2019-2021, COVID, 2008 crisis, 2001 crisis).
     If user_preference is set, the LLM is instructed to tailor the puzzle to that preference.
+    Session deduplication (intervals and metrics) is handled by the caller (app).
     """
-    avoid_2019_2021_covid = session_2019_2021_count >= 1 or session_covid_count >= 1
-    avoid_2008 = session_2008_count >= 1
-    avoid_2001 = session_2001_count >= 1
 
     def fallback():
-        return _random_seed_from_file(
-            avoid_2019_2021_and_covid=avoid_2019_2021_covid,
-            avoid_2008=avoid_2008,
-            avoid_2001=avoid_2001,
-        )
+        return _random_seed_from_file()
 
     try:
         from openai import OpenAI
@@ -219,13 +164,6 @@ def generate_puzzle_seed(
         logger.info("OPENAI_API_KEY missing or empty, using fallback seed")
         return fallback()
 
-    # Safe hint for verification (never log the full key)
-    key_hint = (api_key[:12] + "…") if len(api_key) > 12 else "…"
-    logger.info(
-        "OPENAI_API_KEY is set (prefix=%s), model=%s",
-        key_hint,
-        os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-    )
     try:
         from api.prompts import build_puzzle_seed_prompt
 
@@ -243,9 +181,6 @@ def generate_puzzle_seed(
             requested_source=requested_source,
             series_list=series_list,
             examples_str=examples_str,
-            avoid_2019_2021_covid=avoid_2019_2021_covid,
-            avoid_2008_crisis=avoid_2008,
-            avoid_2001_crisis=avoid_2001,
             user_preference=user_preference,
         )
 
